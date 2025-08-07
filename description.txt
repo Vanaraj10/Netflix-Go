@@ -1,0 +1,141 @@
+### **1. Project Title**
+
+**CineTrack: A Full-Stack Movie & Series Watchlist**
+
+-----
+
+### **2. Project Description (Extensive)**
+
+**Introduction**
+CineTrack is a meticulously planned, full-stack web application designed to serve as a high-fidelity portfolio piece and a functional, elegant platform for users to track their movie and series consumption. The project's primary objective is to demonstrate a mastery of modern web development principles, from secure backend architecture in Go to a dynamic, responsive user interface in React.
+
+**Architectural Philosophy**
+The application is founded on a robust, secure, and decoupled client-server model. The guiding principle is the role of the **Go backend as the application's central nervous system and fortified vault.** It is intentionally designed to be the sole guardian of all secrets (API keys, database credentials, JWT secrets) and the authoritative source of truth for user data. It handles all business logic, data aggregation, and communication with external services. The React frontend is architected as a pure presentation layer—a "dumb" client whose sole responsibilities are to render the state provided by the backend and to capture user input, creating a seamless and interactive user experience. This strict separation of concerns is paramount for achieving security, modularity, and long-term maintainability.
+
+**Target Audience**
+CineTrack is designed for two primary user personas:
+
+1.  **The Enthusiast:** Cinephiles and casual viewers who desire a clean, fast, and minimalist interface to manage their viewing history and discover new titles without the clutter of more feature-heavy platforms.
+2.  **The Developer:** Aspiring and fellow software developers who can view this project's open-source codebase as a learning blueprint for professional full-stack development practices.
+
+**Key User Features & Flow**
+
+  * **Secure & Seamless Onboarding:** A user's journey begins with a simple, secure registration process. Authentication is managed via industry-standard JWTs, ensuring all subsequent interactions are private and secure.
+  * **Personalized Dashboard:** Post-login, the user lands on their personal dashboard. This view is a clean, infinitely-scrolling grid displaying their curated watchlist, with their custom ratings and viewing status prominently featured on each movie card.
+  * **Expansive Discovery Hub:** A dedicated "Discover" page serves as the portal for finding new content. It defaults to showcasing a dynamic list of currently popular movies, immediately engaging the user. This page also houses a powerful, real-time search engine to query the entire TMDB catalog.
+  * **Granular Tracking & Metadata:** Users can add any movie to their personal list, annotating it with crucial personal metadata:
+      * **Viewing Status:** A clear indicator of progress, chosen from 'Plan to Watch', 'Watching', 'Completed', or 'Dropped'.
+      * **Personal Rating:** An integer-based score from 1 to 10, allowing for nuanced personal reviews.
+  * **Effortless Watchlist Management:** The dashboard is interactive, allowing users to instantly update a movie's status or rating via intuitive controls on the movie card, or remove it entirely from their list.
+
+---
+
+### **3. Backend (Go API) - Detailed Plan**
+
+**Technology Stack:** Go, Chi (v5), pgx (PostgreSQL driver), golang-jwt/jwt/v5, bcrypt
+
+**Configuration & Error Handling Strategy**
+
+  * **Configuration Management:** All configuration, including port, database connection string (DSN), and all secrets, will be managed via a `.env` file for local development and environment variables in production. A custom `config` struct will be defined and populated at startup to provide type-safe access to these values throughout the application.
+  * **Structured Error Responses:** The API will enforce a consistent JSON error format for all client-facing errors (e.g., `{ "error": "your password was incorrect" }`). A suite of helper functions (`serverError`, `notFoundError`, `failedValidationError`, etc.) will be created to standardize error responses and logging, ensuring a predictable experience for the frontend client.
+  * **Request Validation:** Incoming request bodies (e.g., during user registration or watchlist updates) will be rigorously validated. This includes checks for required fields, data formats (e.g., valid email structure), and value ranges (e.g., ratings between 1-10), preventing malformed data from reaching the business logic or database.
+  * **Graceful Shutdown:** The `main` function will implement a graceful shutdown mechanism. It will listen for `SIGINT` and `SIGTERM` signals, block until one is received, and then allow a timeout period (e.g., 30 seconds) for existing HTTP requests to complete before closing the database connection pool and exiting.
+
+**Endpoint & Function Breakdown:**
+
+  * **`GET /v1/healthcheck`:** An unauthenticated endpoint that returns a JSON object with the application's status, current environment, and version.
+  * **Authentication Module:**
+      * `POST /v1/users`: Handles new user registration. The handler will first validate the incoming request body, then call an internal data-layer function to hash the password using `bcrypt` and insert the new user record into the database, handling potential email uniqueness violations gracefully.
+      * `POST /v1/tokens`: Manages user login. It retrieves the user by email, securely compares the provided password with the stored hash using `bcrypt.CompareHashAndPassword`, and upon success, generates a signed JWT with an appropriate expiry time.
+  * **TMDB Gateway Module:**
+      * `GET /v1/discover/popular` & `GET /v1/discover/search`: These handlers act as secure proxies. They construct the appropriate request URL for the TMDB API, attach the secret API key from the server's configuration, execute the request, and stream the JSON response directly back to the client, without needing to touch the local database.
+  * **Watchlist Module:**
+      * `GET /v1/watchlist`: The most complex endpoint, engineered for performance.
+        1.  **Authorization:** It first uses the `authenticate` middleware to get the current user's ID.
+        2.  **Database Query:** It fetches a paginated list of `movie_id`, `status`, and `user_rating` from the `user_movies` table for that user.
+        3.  **Concurrent Fetching:** It initializes a `sync.WaitGroup` and launches a separate goroutine for each `movie_id`. Each goroutine is responsible for fetching the full details for one movie from the TMDB API.
+        4.  **Data Aggregation:** The results from the goroutines are collected (e.g., via a channel) and then merged in-memory with the corresponding status and rating data from the initial database query.
+        5.  **Response:** The final, enriched, and paginated list of movie objects is marshaled to JSON and sent to the client.
+
+-----
+
+### **4. Database Info (PostgreSQL)**
+
+**Database System & Rationale:** PostgreSQL is selected for its strict adherence to SQL standards, transactional integrity (ACID compliance), and advanced features like check constraints and robust indexing, which are essential for building a reliable data layer.
+
+**Schema Design & Data Integrity:**
+
+**Table: `users`**
+
+```sql
+-- The 'users' table stores core authentication and profile information.
+CREATE TABLE users (
+    -- BIGSERIAL provides a 64-bit auto-incrementing primary key, suitable for large scale.
+    id BIGSERIAL PRIMARY KEY,
+    -- TEXT is used for variable-length strings without an arbitrary limit.
+    name TEXT NOT NULL,
+    -- The UNIQUE constraint ensures no two users can register with the same email.
+    email TEXT UNIQUE NOT NULL,
+    -- BYTEA is the correct data type for storing the raw binary output of the bcrypt hashing algorithm.
+    hashed_password BYTEA NOT NULL,
+    -- TIMESTAMPTZ stores the timestamp WITH time zone information, crucial for global applications.
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+**Table: `user_movies`**
+
+```sql
+-- This table acts as a 'join table', creating a many-to-many relationship between users and movies.
+CREATE TABLE user_movies (
+    id BIGSERIAL PRIMARY KEY,
+    -- The FOREIGN KEY constraint with ON DELETE CASCADE ensures referential integrity.
+    -- If a user is deleted, all their watchlist entries are automatically and cleanly removed.
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- The integer ID for the movie as provided by the TMDB API.
+    movie_id INT NOT NULL,
+    -- The CHECK constraint enforces business rules at the database level, preventing invalid data.
+    status TEXT NOT NULL CHECK (status IN ('Plan to Watch', 'Watching', 'Completed', 'Dropped')),
+    user_rating INT CHECK (user_rating >= 0 AND user_rating <= 10),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- This composite UNIQUE constraint prevents a user from adding the same movie to their list more than once.
+    UNIQUE (user_id, movie_id)
+);
+
+-- An index on the user_id foreign key is critical for the performance of fetching a user's watchlist.
+CREATE INDEX idx_user_movies_user_id ON user_movies (user_id);
+```
+
+**Connection Management:** The application will use `pgx`'s built-in connection pooling. The pool will be configured at startup with sensible defaults for `maxConns` and `minConns` to efficiently manage database connections under load, reducing the latency associated with establishing new connections for each query.
+
+-----
+
+### **5. Frontend (React) - Detailed Plan**
+
+**Technology Stack:** React (via Vite), React Router (v6+), Axios, Tailwind CSS, `react-hot-toast` (for notifications).
+
+**API Service Layer & Interceptors:**
+A central Axios instance (`apiClient.js`) will be configured. It will utilize **interceptors** for powerful, application-wide request/response handling:
+
+  * **Request Interceptor:** Before any request is sent, this interceptor will check for a JWT in `localStorage` and automatically inject the `Authorization: Bearer <token>` header.
+  * **Response Interceptor:** This will handle global API errors. For example, if any API call returns a `401 Unauthorized` status, the interceptor can automatically clear the user's session data and redirect them to the `/login` page.
+
+**Custom Hooks for Reusability:**
+
+  * `useAuth()`: Provides components with easy access to the authentication context (user data, token, login/logout functions).
+  * `useInfiniteScroll(fetchFunction)`: A powerful, reusable hook to handle paginated data fetching. It will manage the page number, loading state, error state, and the list of items, triggering the `fetchFunction` when the user scrolls near the bottom of the page.
+  * `useDebounce(value, delay)`: This will be used on the search input to prevent firing an API request on every keystroke, instead waiting until the user has stopped typing for a specified `delay`.
+
+**Accessibility (a11y) Commitment:**
+The application will be developed with accessibility as a first-class citizen. This includes using semantic HTML5 elements (`<nav>`, `<main>`, `<footer>`), ensuring all interactive elements are keyboard-navigable, providing `alt` text for images, managing focus when modals appear, and using ARIA (Accessible Rich Internet Applications) attributes to provide context for screen readers.
+
+**Page-by-Page Breakdown:**
+
+| Page                  | Route             | Core Responsibilities & Components                                                                                                                                                             |
+| :-------------------- | :---------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LoginPage** / **RegisterPage** | `/login`, `/register` | Render controlled forms with validation. Utilize `apiClient` for authentication requests. Display loading states and handle errors gracefully using `react-hot-toast` notifications. |
+| **DiscoverPage** | `/discover`       | Manages the state for search queries and popular movie lists. Uses the `useDebounce` hook for the search bar. Renders a grid of `MovieCard` components in their 'discover' variant. A `MovieCard`'s "Add" button will trigger a `Modal` component containing the form to set status and rating. |
+| **DashboardPage** | `/dashboard`      | The main user hub. It will use the `useInfiniteScroll` custom hook to fetch and display the user's watchlist from the `/v1/watchlist` backend endpoint. It renders `MovieCard` components in their 'dashboard' variant, which includes the user's rating/status and Edit/Delete controls. |
+
+This extensive plan provides a complete and professional roadmap for building CineTrack, focusing on security, performance, maintainability, and a high-quality user experience.
