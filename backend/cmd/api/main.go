@@ -23,6 +23,7 @@ func main() {
 	r := chi.NewRouter()
 	r.Get("/v1/healthcheck", handlers.HealthcheckHandler)
 	r.Post("/v1/users", handlers.RegisterHandler(db))
+	r.Post("/v1/token", handlers.TokenHandler(db, cfg.JWTSecret))
 
 	fmt.Printf("Server will run on port: %s\n", cfg.Port)
 
