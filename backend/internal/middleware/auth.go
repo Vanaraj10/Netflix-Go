@@ -12,8 +12,6 @@ type contextKey string
 
 const userIDKey contextKey = "userID"
 
-// Authenticate is a middleware that checks for a valid JWT in the Authorization header.
-// If valid, it adds the user ID to the request context.
 func Authenticate(secret string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +49,6 @@ func Authenticate(secret string) func(http.Handler) http.Handler {
 	}
 }
 
-// GetUserID extracts the user ID from the request context.
 func GetUserID(r *http.Request) int64 {
 	val := r.Context().Value(userIDKey)
 	if id, ok := val.(int64); ok {

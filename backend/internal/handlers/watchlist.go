@@ -13,8 +13,6 @@ import (
 	"github.com/go-chi/chi"
 )
 
-// --- Types for TMDB and Watchlist responses ---
-
 type tmdbMovie struct {
 	ID          int64  `json:"id"`
 	Title       string `json:"title"`
@@ -39,7 +37,7 @@ func WatchlistGetHandler(db *data.DB, tmdbKey string) http.HandlerFunc {
 
 		userMovies, err := db.GetUserMovies(ctx, userID)
 		if err != nil {
-			http.Error(w, "Failed to fetch watchlist", http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
